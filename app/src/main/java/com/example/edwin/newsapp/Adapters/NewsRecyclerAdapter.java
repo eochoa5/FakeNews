@@ -4,6 +4,7 @@ package com.example.edwin.newsapp.Adapters;
  * Created by Edwin on 6/23/2017.
  */
 import android.content.Context;
+import android.database.Cursor;
 import android.support.v7.widget.RecyclerView;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -13,28 +14,25 @@ import android.widget.TextView;
 
 
 import com.bumptech.glide.Glide;
-import com.example.edwin.newsapp.Models.NewsItem;
 import com.example.edwin.newsapp.R;
-import java.util.ArrayList;
-
+import com.example.edwin.newsapp.Utils.Contract;
 
 public class NewsRecyclerAdapter extends RecyclerView.Adapter<NewsRecyclerAdapter.AdapterViewHolder> {
 
-
-    private ArrayList<NewsItem> mNewsData;
     private final NewsAdapterOnClickHandler mClickHandler;
     Context context;
+    private Cursor cursor;
 
     public interface NewsAdapterOnClickHandler {
         void onClick(String url);
     }
 
-    public NewsRecyclerAdapter(NewsAdapterOnClickHandler clickHandler) {
+    public NewsRecyclerAdapter(NewsAdapterOnClickHandler clickHandler, Cursor cursor) {
         mClickHandler = clickHandler;
+        this.cursor = cursor;
     }
 
     public class AdapterViewHolder extends RecyclerView.ViewHolder implements View.OnClickListener {
-
 
         public final TextView title;
         public final TextView description;
@@ -52,7 +50,20 @@ public class NewsRecyclerAdapter extends RecyclerView.Adapter<NewsRecyclerAdapte
         @Override
         public void onClick(View v) {
             int adapterPosition = getAdapterPosition();
-            mClickHandler.onClick(mNewsData.get(adapterPosition).getUrl());
+            cursor.moveToPosition(adapterPosition);
+            mClickHandler.onClick(cursor.getString(cursor.getColumnIndex(Contract.TABLE_NEWS.COLUMN_NAME_URL)));
+        }
+
+        //BIND
+        public void bind(AdapterViewHolder holder, int pos) {
+            cursor.moveToPosition(pos);
+
+            Glide.with(context).load(cursor.getString(cursor.getColumnIndex(Contract.TABLE_NEWS.COLUMN_NAME_THUMBNAIL)))
+                    .into(holder.thumb);
+            holder.title.setText(cursor.getString(cursor.getColumnIndex(Contract.TABLE_NEWS.COLUMN_NAME_TITLE)));
+            holder.time.setText(cursor.getString(cursor.getColumnIndex(Contract.TABLE_NEWS.COLUMN_NAME_AUTHOR)) + "    "
+                    + cursor.getString(cursor.getColumnIndex(Contract.TABLE_NEWS.COLUMN_NAME_PUBLISHED_AT)));
+            holder.description.setText(cursor.getString(cursor.getColumnIndex(Contract.TABLE_NEWS.COLUMN_NAME_DESCRIPTION)));
         }
 
     }
@@ -71,23 +82,15 @@ public class NewsRecyclerAdapter extends RecyclerView.Adapter<NewsRecyclerAdapte
 
     @Override
     public void onBindViewHolder(AdapterViewHolder adapterViewHolder, int position) {
-        Glide.with(context).load(mNewsData.get(position).getUrlToImage())
-                .into(adapterViewHolder.thumb);
-        adapterViewHolder.title.setText(mNewsData.get(position).getTitle());
-        adapterViewHolder.time.setText(mNewsData.get(position).getAuthor() + "    " + mNewsData.get(position).getPublishedAt());
-        adapterViewHolder.description.setText(mNewsData.get(position).getDescription());
+        adapterViewHolder.bind(adapterViewHolder, position);
 
     }
 
 
     @Override
     public int getItemCount() {
-        if (null == mNewsData) return 0;
-        return mNewsData.size();
+        return cursor.getCount();
     }
 
-    public void setNewsData(ArrayList<NewsItem> newsData) {
-        mNewsData = newsData;
-        notifyDataSetChanged();
-    }
+
 }

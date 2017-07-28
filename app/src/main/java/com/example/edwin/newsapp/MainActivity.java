@@ -2,7 +2,9 @@ package com.example.edwin.newsapp;
 
 import android.app.ProgressDialog;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.net.Uri;
@@ -23,6 +25,9 @@ import com.example.edwin.newsapp.Adapters.NewsRecyclerAdapter;
 import com.example.edwin.newsapp.Models.NewsItem;
 import com.example.edwin.newsapp.Utils.Contract;
 import com.example.edwin.newsapp.Utils.DBHelper;
+import com.example.edwin.newsapp.Utils.DatabaseUtils;
+import com.example.edwin.newsapp.Utils.RefreshTasks;
+import com.example.edwin.newsapp.Utils.ScheduleUtilities;
 
 import org.json.JSONException;
 import java.io.IOException;
@@ -30,19 +35,17 @@ import java.net.URL;
 import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity implements NewsRecyclerAdapter.NewsAdapterOnClickHandler,
-        LoaderManager.LoaderCallbacks<ArrayList<NewsItem>>{
+        LoaderManager.LoaderCallbacks<Void>{
 
-    private ProgressDialog mProgressDialog;
-    private static final int NEWS_LOADER = 1;
+
     private RecyclerView mRecyclerView;
     private NewsRecyclerAdapter mNewsAdapter;
-    private LoaderManager loaderManager;
-    private Loader<ArrayList<NewsItem>> loader;
-    private boolean isLoaderRunning = false;
-    private boolean shouldLoaderBeStarted = false;
-    private DBHelper helper;
+    private static final int NEWS_LOADER = 1;
     private Cursor cursor;
     private SQLiteDatabase db;
+    private ProgressDialog mProgressDialog;
+    private SharedPreferences sharedPreferences;
+    public static final String PREFS = "Prefs" ;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -56,19 +59,23 @@ public class MainActivity extends AppCompatActivity implements NewsRecyclerAdapt
                 = new LinearLayoutManager(this, LinearLayoutManager.VERTICAL, false);
         mRecyclerView.setLayoutManager(layoutManager);
         mRecyclerView.setHasFixedSize(true);
-        mNewsAdapter = new NewsRecyclerAdapter(this);
-        mRecyclerView.setAdapter(mNewsAdapter);
 
-        //initialize or restart the loader
-        //flag used to prevent loader from loading onResume
-        shouldLoaderBeStarted = true;
-        loaderManager = getSupportLoaderManager();
-        loader = loaderManager.getLoader(NEWS_LOADER);
-        if(loader == null){
-            loaderManager.initLoader(NEWS_LOADER, null, this).forceLoad();
-        }else{
-            loaderManager.restartLoader(NEWS_LOADER, null, this);
+        sharedPreferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+
+        /*if it's the first app run, call news API and insert results into db immediately
+        instead of waiting 60 seconds for the job to do it bc onstart will soon try to pull from an empty db and we don't
+        want that
+         */
+
+        if(!sharedPreferences.contains("HasRan")){
+            load();
+            SharedPreferences.Editor editor = sharedPreferences.edit();
+            editor.putBoolean("HasRan", true);
+            editor.commit();
         }
+
+        ScheduleUtilities.scheduleRefresh(this);
+
     }
 
     @Override
@@ -82,48 +89,61 @@ public class MainActivity extends AppCompatActivity implements NewsRecyclerAdapt
     protected void onStart() {
         super.onStart();
 
-        helper = new DBHelper(this);
-        db = helper.getWritableDatabase();
-        //cursor = getAllItems(db);
-        String title = "the title";
-        String author = "goku";
-        String description = "bad news";
-        String published_at = "12/25/16";
-        String url = "www.google.com";
-        String thumbnail = "img.png";
+        //get all stories from db
+        db = new DBHelper(MainActivity.this).getReadableDatabase();
+        cursor = DatabaseUtils.getAll(db);
 
-        addNewsItem(db, title, author, description, published_at, url, thumbnail);
-        cursor = getAllItems(db);
-        System.out.println("the table has " + cursor.getCount() + " items");
+        mNewsAdapter = new NewsRecyclerAdapter(this, cursor);
+        mRecyclerView.setAdapter(mNewsAdapter);
+
 
     }
 
-    private Cursor getAllItems(SQLiteDatabase db) {
-        return db.query(
-                Contract.TABLE_NEWS.TABLE_NAME,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null
-        );
+    //AsynctaskLoader
+    @Override
+    public Loader<Void> onCreateLoader(int id, final Bundle args) {
+        return new AsyncTaskLoader<Void>(this) {
+
+            @Override
+            protected void onStartLoading() {
+                super.onStartLoading();
+
+                mProgressDialog = new ProgressDialog(MainActivity.this);
+                mProgressDialog.setMessage("Loading articles...");
+                mProgressDialog.setIndeterminate(false);
+                mProgressDialog.show();
+
+            }
+
+            @Override
+            public Void loadInBackground() {
+
+                //delete all from db, call news API, insert all results into db
+                RefreshTasks.refreshArticles(MainActivity.this);
+                return null;
+            }
+
+        };
+    }
+
+    @Override
+    public void onLoadFinished(Loader<Void> loader, Void data) {
+        db = new DBHelper(MainActivity.this).getReadableDatabase();
+        cursor = DatabaseUtils.getAll(db);
+
+        mNewsAdapter = new NewsRecyclerAdapter(this, cursor);
+        mRecyclerView.setAdapter(mNewsAdapter);
+        mNewsAdapter.notifyDataSetChanged();
+
+        mProgressDialog.dismiss();
 
     }
 
-    private long addNewsItem(SQLiteDatabase db, String title, String author, String description,
-                             String published_at, String url, String thumbnail) {
-
-        ContentValues cv = new ContentValues();
-        cv.put(Contract.TABLE_NEWS.COLUMN_NAME_TITLE, title);
-        cv.put(Contract.TABLE_NEWS.COLUMN_NAME_AUTHOR, author);
-        cv.put(Contract.TABLE_NEWS.COLUMN_NAME_DESCRIPTION, description);
-        cv.put(Contract.TABLE_NEWS.COLUMN_NAME_PUBLISHED_AT, published_at);
-        cv.put(Contract.TABLE_NEWS.COLUMN_NAME_URL, url);
-        cv.put(Contract.TABLE_NEWS.COLUMN_NAME_THUMBNAIL, thumbnail);
-
-        return db.insert(Contract.TABLE_NEWS.TABLE_NAME, null, cv);
+    @Override
+    public void onLoaderReset(Loader<Void> loader) {
     }
+
+
 
     @Override
     public void onClick(String url) {
@@ -134,65 +154,6 @@ public class MainActivity extends AppCompatActivity implements NewsRecyclerAdapt
         }
 
     }
-
-
-
-    @Override
-    public Loader<ArrayList<NewsItem>> onCreateLoader(int id, Bundle args) {
-        return new AsyncTaskLoader<ArrayList<NewsItem>>(this) {
-            @Override
-            protected void onStartLoading() {
-
-                super.onStartLoading();
-                if(!shouldLoaderBeStarted){return;}
-                isLoaderRunning = true;
-                mProgressDialog = new ProgressDialog(MainActivity.this);
-                mProgressDialog.setMessage("Loading data...");
-                mProgressDialog.setIndeterminate(false);
-                mProgressDialog.show();
-                System.out.println("loader refreshed");
-            }
-
-            @Override
-            public ArrayList<NewsItem> loadInBackground() {
-                if(!shouldLoaderBeStarted){return null;}
-                String jsonResults;
-                ArrayList<NewsItem> results = null;
-                try {
-                    jsonResults = NetworkUtils.getResponseFromHttpUrl(NetworkUtils.buildUrl());
-                    results = NetworkUtils.parseJSON(jsonResults);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                } catch (JSONException e) {
-                    e.printStackTrace();
-                }
-                return results;
-            }
-        };
-    }
-
-    @Override
-    public void onLoadFinished(Loader<ArrayList<NewsItem>> loader, ArrayList<NewsItem> data) {
-        if(!shouldLoaderBeStarted){return;}
-        if(data != null){
-            mNewsAdapter.setNewsData(data);
-        }
-        else{
-            Snackbar.make(findViewById(R.id.coordinatorLayout), "An error occurred please try again", Snackbar.LENGTH_LONG)
-                    .show();
-        }
-        mProgressDialog.dismiss();
-        isLoaderRunning = false;
-        shouldLoaderBeStarted = false;
-
-    }
-
-    @Override
-    public void onLoaderReset(Loader<ArrayList<NewsItem>> loader) {
-
-    }
-
-
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
@@ -205,15 +166,18 @@ public class MainActivity extends AppCompatActivity implements NewsRecyclerAdapt
 
         int id = item.getItemId();
         if (id == R.id.action_refresh) {
-            shouldLoaderBeStarted = true;
-            if(!isLoaderRunning) {
 
-                loaderManager.restartLoader(NEWS_LOADER, null, this).forceLoad();
-            }
-
-            return true;
+            ////delete all from db, call news API, insert all results into db
+            //refresh cursor to fetch all results from db
+            load();
         }
 
         return super.onOptionsItemSelected(item);
+    }
+
+    public void load() {
+        LoaderManager loaderManager = getSupportLoaderManager();
+        loaderManager.restartLoader(NEWS_LOADER, null, this).forceLoad();
+
     }
 }
